@@ -1,11 +1,12 @@
 name: PI-CI
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - '**'
 env:
-  IMAGE_NAME: ptrsr/pi-ci
+  IMAGE_NAME: openoms/pi-ci
 
 jobs:
   build:
