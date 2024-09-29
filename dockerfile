@@ -4,9 +4,11 @@ ARG KERNEL_BRANCH=rpi-6.6.y
 ARG KERNEL_GIT=https://github.com/raspberrypi/linux.git
 
 # Distro source
-ARG DISTRO_DATE=2024-03-15
+ARG DISTRO_DATE=2024-07-04
 ARG DISTRO_FILE=$DISTRO_DATE-raspios-bookworm-arm64.img
 ARG DISTRO_IMG=https://downloads.raspberrypi.com/raspios_arm64/images/raspios_arm64-$DISTRO_DATE/$DISTRO_FILE.xz
+# Extract the DISTRO_IMG.sha256 from https://downloads.raspberrypi.com/raspios_arm64/images/
+ARG DISTRO_SHA256=5b2c3203d9e32b5c816badc41eb3d9d3f25fb90cb0d11b7eeb59c26f6e90aeec
 
 # Default directory and file names
 ARG BUILD_DIR=/build/
@@ -33,12 +35,19 @@ ARG DISTRO_FILE
 ARG DISTRO_IMG
 
 # Download raspbian distro
-RUN wget -nv -O /tmp/$DISTRO_FILE.xz $DISTRO_IMG \
- && unxz /tmp/$DISTRO_FILE.xz
+RUN wget -nv -O /tmp/$DISTRO_FILE.xz $DISTRO_IMG
+
+# Verify the checksum
+RUN echo "$DISTRO_SHA256 /tmp/$DISTRO_FILE.xz" > /tmp/expected_sha256 && \
+    sha256sum /tmp/$DISTRO_FILE.xz | awk '{print $1}' > /tmp/downloaded_sha256 && \
+    diff /tmp/downloaded_sha256 /tmp/expected_sha256 || { echo "SHA256 checksum verification failed"; exit 1; }
+
+# Uncompress the verified distro image
+RUN unxz /tmp/$DISTRO_FILE.xz
 
 # Extract distro boot and root
-RUN mkdir /mnt/root /mnt/boot \
- && guestfish add tmp/$DISTRO_FILE : run : mount /dev/sda1 / : copy-out / /mnt/boot : umount / : mount /dev/sda2 / : copy-out / /mnt/root
+RUN mkdir /mnt/root /mnt/boot &&
+    guestfish add tmp/$DISTRO_FILE : run : mount /dev/sda1 / : copy-out / /mnt/boot : umount / : mount /dev/sda2 / : copy-out / /mnt/root
 
 # Copy boot configuration
 COPY src/conf/fstab /mnt/root/etc/
@@ -49,34 +58,33 @@ COPY src/conf/99-qemu.rules /mnt/root/etc/udev/rules.d/
 RUN touch /mnt/boot/ssh
 
 # Allow SSH root login with no password
-RUN sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /mnt/root/etc/ssh/sshd_config \
- && sed -i 's/#PermitEmptyPasswords no/permitEmptyPasswords yes/' /mnt/root/etc/ssh/sshd_config
+RUN sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /mnt/root/etc/ssh/sshd_config &&
+    sed -i 's/#PermitEmptyPasswords no/permitEmptyPasswords yes/' /mnt/root/etc/ssh/sshd_config
 
 # Enable root login and remove user 'pi'
-RUN sed -i 's/^root:\*:/root::/' /mnt/root/etc/shadow \
- && sed -i '/^pi/d' /mnt/root/etc/shadow \
- && sed -i '/^pi/d' /mnt/root/etc/passwd \
- && sed -i '/^pi/d' /mnt/root/etc/group \
- && rm -r /mnt/root/home/pi
+RUN sed -i 's/^root:\*:/root::/' /mnt/root/etc/shadow &&
+    sed -i '/^pi/d' /mnt/root/etc/shadow &&
+    sed -i '/^pi/d' /mnt/root/etc/passwd &&
+    sed -i '/^pi/d' /mnt/root/etc/group &&
+    rm -r /mnt/root/home/pi
 
 # Setup root auto login
 RUN mkdir /mnt/root/etc/systemd/system/serial-getty@ttyAMA0.service.d/
 COPY src/conf/login.conf /mnt/root/etc/systemd/system/serial-getty@ttyAMA0.service.d/override.conf
 
 # Disable userconfig.service
-RUN rm /mnt/root/usr/lib/systemd/system/userconfig.service \
- && rm /mnt/root/etc/systemd/system/multi-user.target.wants/userconfig.service
+RUN rm /mnt/root/usr/lib/systemd/system/userconfig.service &&
+    rm /mnt/root/etc/systemd/system/multi-user.target.wants/userconfig.service
 
- # Create new distro image from modified boot and root
+# Create new distro image from modified boot and root
 ARG BUILD_DIR
 RUN mkdir $BUILD_DIR
-RUN guestfish -N $BUILD_DIR/distro.img=bootroot:vfat:ext4:2G \
- && guestfish add $BUILD_DIR/distro.img : run : mount /dev/sda1 / : glob copy-in /mnt/boot/* / : umount / : mount /dev/sda2 / : glob copy-in /mnt/root/* / \
- && sfdisk --part-type $BUILD_DIR/distro.img 1 c
+RUN guestfish -N $BUILD_DIR/distro.img=bootroot:vfat:ext4:2G &&
+    guestfish add $BUILD_DIR/distro.img : run : mount /dev/sda1 / : glob copy-in /mnt/boot/* / : umount / : mount /dev/sda2 / : glob copy-in /mnt/root/* / &&
+    sfdisk --part-type $BUILD_DIR/distro.img 1 c
 
 # Convert new distro image to sparse format
 RUN qemu-img convert -f raw -O qcow2 $BUILD_DIR/distro.img $BUILD_DIR/distro.qcow2
-
 
 # ---------------------------------
 FROM ubuntu:24.04 AS kernel-builder
@@ -105,15 +113,14 @@ ARG ARCH=arm64
 ARG CROSS_COMPILE=aarch64-linux-gnu-
 
 # Compile default VM guest image
-RUN make -C $BUILD_DIR/linux defconfig kvm_guest.config \
- && make -C $BUILD_DIR/linux -j$(nproc) Image
+RUN make -C $BUILD_DIR/linux defconfig kvm_guest.config &&
+    make -C $BUILD_DIR/linux -j$(nproc) Image
 
 # Customize guest image
 COPY src/conf/custom.conf $BUILD_DIR/linux/kernel/configs/custom.config
-RUN make -C $BUILD_DIR/linux custom.config \
- && make -C $BUILD_DIR/linux -j$(nproc) Image \
- && mv $BUILD_DIR/linux/arch/arm64/boot/Image $BUILD_DIR/kernel.img
-
+RUN make -C $BUILD_DIR/linux custom.config &&
+    make -C $BUILD_DIR/linux -j$(nproc) Image &&
+    mv $BUILD_DIR/linux/arch/arm64/boot/Image $BUILD_DIR/kernel.img
 
 # ---------------------------
 FROM ubuntu:24.04 AS emulator
@@ -127,7 +134,6 @@ RUN apt-get update && apt install -y \
     linux-image-generic \
     libguestfs-tools \
     qemu-efi-aarch64
-
 
 ENV PIP_BREAK_SYSTEM_PACKAGES 1
 ARG APP_DIR
