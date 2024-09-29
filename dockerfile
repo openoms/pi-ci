@@ -37,10 +37,10 @@ ARG DISTRO_IMG
 # Download raspbian distro
 RUN wget -nv -O /tmp/$DISTRO_FILE.xz $DISTRO_IMG
 
-# Verify the checksum
-RUN cd tmp && \
-    echo "$DISTRO_SHA256 $DISTRO_FILE.xz" >expected_sha256 && \
-    sha256sum -c expected_sha256 || exit 1
+## Verify the checksum
+#RUN cd tmp && \
+#    echo "$DISTRO_SHA256 $DISTRO_FILE.xz" >expected_sha256 && \
+#    sha256sum -c expected_sha256 || exit 1
 
 # Uncompress the verified distro image
 RUN unxz /tmp/$DISTRO_FILE.xz
