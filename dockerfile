@@ -38,16 +38,18 @@ ARG DISTRO_IMG
 RUN wget -nv -O /tmp/$DISTRO_FILE.xz $DISTRO_IMG
 
 # Verify the checksum
-RUN echo "$DISTRO_SHA256 /tmp/$DISTRO_FILE.xz" > /tmp/expected_sha256 && \
-    sha256sum /tmp/$DISTRO_FILE.xz | awk '{print $1}' > /tmp/downloaded_sha256 && \
-    diff /tmp/downloaded_sha256 /tmp/expected_sha256 || { echo "SHA256 checksum verification failed"; exit 1; }
+RUN cd tmp && \
+    echo "$DISTRO_SHA256 $DISTRO_FILE.xz" >expected_sha256 && \
+    sha256sum -c expected_sha256 || exit 1
 
 # Uncompress the verified distro image
 RUN unxz /tmp/$DISTRO_FILE.xz
 
-# Extract distro boot and root
-RUN mkdir /mnt/root /mnt/boot &&
-    guestfish add tmp/$DISTRO_FILE : run : mount /dev/sda1 / : copy-out / /mnt/boot : umount / : mount /dev/sda2 / : copy-out / /mnt/root
+RUN mkdir /mnt/root /mnt/boot && \
+    guestfish --ro -a /tmp/$DISTRO_FILE run : \
+        mount /dev/sda1 / : copy-out / /mnt/boot : \
+        umount /dev/sda1 : \
+        mount /dev/sda2 / : copy-out / /mnt/root
 
 # Copy boot configuration
 COPY src/conf/fstab /mnt/root/etc/
@@ -58,14 +60,14 @@ COPY src/conf/99-qemu.rules /mnt/root/etc/udev/rules.d/
 RUN touch /mnt/boot/ssh
 
 # Allow SSH root login with no password
-RUN sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /mnt/root/etc/ssh/sshd_config &&
+RUN sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /mnt/root/etc/ssh/sshd_config && \
     sed -i 's/#PermitEmptyPasswords no/permitEmptyPasswords yes/' /mnt/root/etc/ssh/sshd_config
 
 # Enable root login and remove user 'pi'
-RUN sed -i 's/^root:\*:/root::/' /mnt/root/etc/shadow &&
-    sed -i '/^pi/d' /mnt/root/etc/shadow &&
-    sed -i '/^pi/d' /mnt/root/etc/passwd &&
-    sed -i '/^pi/d' /mnt/root/etc/group &&
+RUN sed -i 's/^root:\*:/root::/' /mnt/root/etc/shadow && \
+    sed -i '/^pi/d' /mnt/root/etc/shadow && \
+    sed -i '/^pi/d' /mnt/root/etc/passwd && \
+    sed -i '/^pi/d' /mnt/root/etc/group && \
     rm -r /mnt/root/home/pi
 
 # Setup root auto login
@@ -73,14 +75,14 @@ RUN mkdir /mnt/root/etc/systemd/system/serial-getty@ttyAMA0.service.d/
 COPY src/conf/login.conf /mnt/root/etc/systemd/system/serial-getty@ttyAMA0.service.d/override.conf
 
 # Disable userconfig.service
-RUN rm /mnt/root/usr/lib/systemd/system/userconfig.service &&
+RUN rm /mnt/root/usr/lib/systemd/system/userconfig.service && \
     rm /mnt/root/etc/systemd/system/multi-user.target.wants/userconfig.service
 
 # Create new distro image from modified boot and root
 ARG BUILD_DIR
 RUN mkdir $BUILD_DIR
-RUN guestfish -N $BUILD_DIR/distro.img=bootroot:vfat:ext4:2G &&
-    guestfish add $BUILD_DIR/distro.img : run : mount /dev/sda1 / : glob copy-in /mnt/boot/* / : umount / : mount /dev/sda2 / : glob copy-in /mnt/root/* / &&
+RUN guestfish -N $BUILD_DIR/distro.img=bootroot:vfat:ext4:2G && \
+    guestfish add $BUILD_DIR/distro.img : run : mount /dev/sda1 / : glob copy-in /mnt/boot/* / : umount / : mount /dev/sda2 / : glob copy-in /mnt/root/* / && \
     sfdisk --part-type $BUILD_DIR/distro.img 1 c
 
 # Convert new distro image to sparse format
@@ -113,13 +115,13 @@ ARG ARCH=arm64
 ARG CROSS_COMPILE=aarch64-linux-gnu-
 
 # Compile default VM guest image
-RUN make -C $BUILD_DIR/linux defconfig kvm_guest.config &&
+RUN make -C $BUILD_DIR/linux defconfig kvm_guest.config && \
     make -C $BUILD_DIR/linux -j$(nproc) Image
 
 # Customize guest image
 COPY src/conf/custom.conf $BUILD_DIR/linux/kernel/configs/custom.config
-RUN make -C $BUILD_DIR/linux custom.config &&
-    make -C $BUILD_DIR/linux -j$(nproc) Image &&
+RUN make -C $BUILD_DIR/linux custom.config && \
+    make -C $BUILD_DIR/linux -j$(nproc) Image && \
     mv $BUILD_DIR/linux/arch/arm64/boot/Image $BUILD_DIR/kernel.img
 
 # ---------------------------

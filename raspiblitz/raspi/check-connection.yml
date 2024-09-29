@@ -1,0 +1,5 @@
+- name: Test connection to Raspberry Pi
+  hosts: raspi
+  tasks:
+    - name: Ping Raspberry Pi
+      ping:
