@@ -1,10 +1,14 @@
 name: PI-CI
 
+concurrency:
+  group: PI-CI-${{ github.head_ref }}
+  cancel-in-progress: true
+
 on:
   workflow_dispatch:
   push:
     branches:
-      - '**'
+      - "**"
 env:
   IMAGE_NAME: openoms/pi-ci
 
@@ -35,7 +39,7 @@ jobs:
       - name: Set up Docker Buildx
         id: buildx
         uses: docker/setup-buildx-action@v3
-      
+
       - name: Build Docker image
         run: |
           docker buildx build \
